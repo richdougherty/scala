@@ -54,38 +54,101 @@ private[concurrent] object Promise {
   }
 
   /** Default promise implementation.
+   *
+   *  A DefaultPromise has three possible internal states.
+   *  1. Canonical/Not-Completed - represented by a List[CallbackRunnable] object
+   *     holding its listeners.
+   *  2. Canonical/Completed - represented by a Try[T] object holding its result.
+   *  3. Linked - represented by a DefaultPromise[T] object holding the promise that
+   *     this promise is linked to. By following the chain of linked promises the
+   *     underlying canonical promise (that will hold the final result) can be reached.
+   *
+   *  A DefaultPromise begins in the Canonical/Not-Completed with an empty list of
+   *  listeners. It can be completed (see `tryComplete`) or linked to another
+   *  DefaultPromise (see `link`).
+   *
+   *  When waiting on completion (see `awaitDeadline` and `awaitUnbounded`), the
+   *  chain of linked promises is first traversed until the canonical promise at the head of
+   *  the chain is located. If the canonical promise is not completed yet, the thread will
+   *  wait on the promise's monitor until the promise is completed or until it is linked to
+   *  another promise. The thread will be notified when the promise's state changes; either
+   *  when the promise is completed or when the promise is linked to another promise.
    */
   class DefaultPromise[T] extends AbstractPromise with Promise[T] { self =>
-    updateState(null, Nil) // Start at "No callbacks"
+    updateState(null, Nil) // Start in the Canonical/Not-Completed state with no listeners
 
-    protected final def tryAwait(atMost: Duration): Boolean = {
-      @tailrec
-      def awaitUnsafe(deadline: Deadline, nextWait: FiniteDuration): Boolean = {
-        if (!isCompleted && nextWait > Duration.Zero) {
-          val ms = nextWait.toMillis
-          val ns = (nextWait.toNanos % 1000000l).toInt // as per object.wait spec
-
-          synchronized { if (!isCompleted) wait(ms, ns) }
-
-          awaitUnsafe(deadline, deadline.timeLeft)
-        } else
-          isCompleted
-      }
-      @tailrec
-      def awaitUnbounded(): Boolean = {
-        if (isCompleted) true
-        else {
-          synchronized { if (!isCompleted) wait() }
-          awaitUnbounded()
+    /** Get the canonical promise for this promise, compressing links. The canonical
+     *  promise will hold the result and list of callbacks for all promises linked to it.
+     *  For many promises the result of calling `canonical()` will just be `this`.
+     *  However for linked promises, this method will traverse each link until it locates
+     *  the underlying linked promise.
+     *
+     *  As a side effect of calling this method, any links back to the canonical promise
+     *  are flattened so that, after this method is called, the canonical promise is at
+     *  most one link away from this promise.
+     */
+    final def canonical(): DefaultPromise[T] = {
+      @tailrec def canonical(): DefaultPromise[T] = {
+        getState match {
+          case linked: DefaultPromise[_] => {
+            val p = linked.asInstanceOf[DefaultPromise[T]]
+            val target = p.canonical()
+            if (linked eq target) target else if (updateState(linked, target)) target else canonical()
+          }
+          case _ => this
         }
       }
+      canonical()
+    }
 
+    /** Try waiting for this promise to be completed.
+     */
+    protected final def tryAwait(atMost: Duration): Boolean = {
       import Duration.Undefined
       atMost match {
         case u if u eq Undefined => throw new IllegalArgumentException("cannot wait for Undefined period")
         case Duration.Inf        => awaitUnbounded()
         case Duration.MinusInf   => isCompleted
-        case f: FiniteDuration   => if (f > Duration.Zero) awaitUnsafe(f.fromNow, f) else isCompleted
+        case f: FiniteDuration   => if (f > Duration.Zero) awaitDeadline(f.fromNow, f) else isCompleted
+      }
+    }
+
+    /** Try waiting until the deadline for this promise to be completed.
+     */
+    @tailrec
+    private final def awaitDeadline(deadline: Deadline, nextWait: FiniteDuration): Boolean = getState match {
+      case _: Try[_] => true
+      case _: DefaultPromise[_] => canonical().awaitDeadline(deadline, nextWait)
+      case _: List[_] if nextWait <= Duration.Zero => false
+      case _: List[_] => {
+        val ms = nextWait.toMillis
+        val ns = (nextWait.toNanos % 1000000l).toInt // as per object.wait spec
+
+        synchronized {
+          getState match {
+            case _: List[_] => wait(ms, ns)
+            case _ => ()
+          }
+        }
+
+        awaitDeadline(deadline, deadline.timeLeft)
+      }
+    }
+
+    /** Wait forever for this promise to be completed.
+     */
+    @tailrec
+    private final def awaitUnbounded(): Boolean = getState match {
+      case _: Try[_] => true
+      case _: DefaultPromise[_] => canonical().awaitUnbounded()
+      case _: List[_] => {
+        synchronized {
+          getState match {
+            case _: List[_] => wait()
+            case _ => ()
+          }
+        }
+        awaitUnbounded()
       }
     }
 
@@ -104,47 +167,81 @@ private[concurrent] object Promise {
 
     def value: Option[Try[T]] = getState match {
       case c: Try[_] => Some(c.asInstanceOf[Try[T]])
+      case _: DefaultPromise[_] => canonical().value
       case _ => None
     }
 
     override def isCompleted: Boolean = getState match { // Cheaper than boxing result into Option due to "def value"
       case _: Try[_] => true
+      case _: DefaultPromise[_] => canonical().isCompleted
       case _ => false
     }
 
     def tryComplete(value: Try[T]): Boolean = {
       val resolved = resolveTry(value)
-      (try {
-        @tailrec
-        def tryComplete(v: Try[T]): List[CallbackRunnable[T]] = {
-          getState match {
-            case raw: List[_] =>
-              val cur = raw.asInstanceOf[List[CallbackRunnable[T]]]
-              if (updateState(cur, v)) cur else tryComplete(v)
-            case _ => null
-          }
-        }
-        tryComplete(resolved)
-      } finally {
-        synchronized { notifyAll() } //Notify any evil blockers
-      }) match {
+      tryCompleteAndGetListeners(resolved) match {
         case null             => false
         case rs if rs.isEmpty => true
         case rs               => rs.foreach(r => r.executeWithValue(resolved)); true
       }
     }
 
+    /** Called by `tryComplete` to store the resolved value and get the list of
+     *  listeners, or `null` if it is already completed.
+     */
+    @tailrec
+    private final def tryCompleteAndGetListeners(v: Try[T]): List[CallbackRunnable[T]] = {
+      getState match {
+        case raw: List[_] =>
+          val cur = raw.asInstanceOf[List[CallbackRunnable[T]]]
+          if (updateState(cur, v)) {
+            synchronized { notifyAll() }
+            cur
+          } else tryCompleteAndGetListeners(v)
+        case _: DefaultPromise[_] =>
+          canonical().tryCompleteAndGetListeners(v)
+        case _ => null
+      }
+    }
+
     def onComplete[U](func: Try[T] => U)(implicit executor: ExecutionContext): Unit = {
       val preparedEC = executor.prepare()
       val runnable = new CallbackRunnable[T](preparedEC, func)
+      dispatchOrAddCallback(runnable)
+    }
 
-      @tailrec //Tries to add the callback, if already completed, it dispatches the callback to be executed
-      def dispatchOrAddCallback(): Unit =
-        getState match {
-          case r: Try[_]          => runnable.executeWithValue(r.asInstanceOf[Try[T]])
-          case listeners: List[_] => if (updateState(listeners, runnable :: listeners)) () else dispatchOrAddCallback()
-        }
-      dispatchOrAddCallback()
+    /** Tries to add the callback, if already completed, it dispatches the callback to be executed
+     */
+    @tailrec
+    private final def dispatchOrAddCallback(runnable: CallbackRunnable[T]): Unit = {
+      getState match {
+        case r: Try[_]          => runnable.executeWithValue(r.asInstanceOf[Try[T]])
+        case _: DefaultPromise[_] => canonical().dispatchOrAddCallback(runnable)
+        case listeners: List[_] => if (updateState(listeners, runnable :: listeners)) () else dispatchOrAddCallback(runnable)
+      }
+    }
+
+    /** Link this promise to another promise so that the other promise becomes the canonical
+     *  promise for this promise. Listeners will be added/dispatched to that promise once the
+     *  link is in place.
+     *
+     *  If this promise is already completed, the same effect as linking is achieved by simply
+     *  copying this promise's result to the target promise.
+     */
+    @tailrec
+    final def link(target: DefaultPromise[T]): Unit = {
+      if (this eq target) return
+
+      getState match {
+        case r: Try[_] =>
+          if (!target.tryComplete(r.asInstanceOf[Try[T]])) throw new IllegalStateException("Cannot link completed promises together")
+        case _: DefaultPromise[_] =>
+          canonical().link(target)
+        case listeners: List[_] => if (updateState(listeners, target)) {
+          synchronized { notifyAll() }
+          if (!listeners.isEmpty) listeners.asInstanceOf[List[CallbackRunnable[T]]].foreach(target.dispatchOrAddCallback(_))
+        } else link(target)
+      }
     }
   }
 
