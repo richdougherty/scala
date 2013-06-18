@@ -55,8 +55,10 @@ private[concurrent] object Promise {
     case e: Error                                  => Failure(new ExecutionException("Boxed Error", e))
     case t                                         => Failure(t)
   }
-   
-   /*
+
+   /**
+    * Latch used to implement waiting on a DefaultPromise's result.
+    *
     * Inspired by: http://gee.cs.oswego.edu/cgi-bin/viewcvs.cgi/jsr166/src/main/java/util/concurrent/locks/AbstractQueuedSynchronizer.java
     * Written by Doug Lea with assistance from members of JCP JSR-166
     * Expert Group and released to the public domain, as explained at
@@ -73,11 +75,73 @@ private[concurrent] object Promise {
 
 
   /** Default promise implementation.
+   *
+   *  Logically, a promise has two states:
+   *
+   *  1. Incomplete, with an associated list of callbacks waiting on completion.
+   *  2. Complete, with a result.
+   *
+   *  However, a DefaultPromise can also be linked to another DefaultPromise, so that
+   *  both promises appear to share the same state. The ability to link DefaultPromises
+   *  is needed to prevent space leaks when using the flatMap operation. Keeping the
+   *  promises separate, with their state instead synchronized via completion handlers,
+   *  resulted in memory leaks.
+   *
+   *  When a DefaultPromise is linked to an underlying DefaultPromise, all calls will be
+   *  delegated to the underlying promise, e.g. calling `value` on the linked promise
+   *  will result in a call to `value` on the underlying promise. By delegating all calls,
+   *  the linked promise will always appear externally to have exactly the same state as
+   *  the underlying promise. The promise that contains the actual promise state (i.e. any
+   *  promise that isn't linked to another promise) is called the "canonical" promise.
+   *
+   *  Linked promises can be linked to *other* linked promises, resulting in link chains
+   *  of arbitrary length. In practice, the link chain will usually be short because an
+   *  optimization within DefaultPromise relinks a promise to its canonical promise
+   *  whenever the chain is found to have grown.
+   * 
+   *  A DefaultPromise stores its state entirely in the AnyRef cell exposed by AbstractPromise.
+   *  The type of object stored in the cell fully describes the current state of the promise.
+   *
+   *  1. List[CallbackRunnable] - The promise is incomplete and has zero or more callbacks
+   *     to call when it is eventually completed.
+   *  2. Try[T] - The promise is complete and now contains its value.
+   *  3. DefaultPromise[T] - The promise is linked to another promise.
    */
-  class DefaultPromise[T] extends AbstractPromise with Promise[T] { self =>
-    updateState(null, Nil) // Start at "No callbacks"
+  final class DefaultPromise[T] extends AbstractPromise with Promise[T] { self =>
+    updateState(null, Nil)
 
-    protected final def tryAwait(atMost: Duration): Boolean = if (!isCompleted) {
+    /** Get the canonical promise for this promise. For many promises the result of calling
+     *  `canonical()` will just be `this`. However for linked promises, this method will
+     *  traverse each link until it locates the canonical promise at the head of the link chain.
+     *
+     *  As a side effect of calling this method, any link from this promise back to the
+     *  canonical promise will be updated to point directly to the canonical promise. In the
+     *  case where multiple links were traversed to find the canonical promise, this will make
+     *  it faster when `canonical()` is called a second time.
+     */
+    @tailrec
+    def canonical(): DefaultPromise[T] = {
+      getState match {
+        case linked: DefaultPromise[_] =>
+          val target = linked.asInstanceOf[DefaultPromise[T]].headLinked
+          if (linked eq target) target else if (updateState(linked, target)) target else canonical()
+        case _ => this
+      }
+    }
+
+    /** Get the promise at the head of the chain of linked promises. Used by `canonical()`.
+     */
+    @tailrec
+    private def headLinked: DefaultPromise[T] = {
+      getState match {
+        case linked: DefaultPromise[_] => linked.asInstanceOf[DefaultPromise[T]].headLinked
+        case _ => this
+      }
+    }
+
+    /** Try waiting for this promise to be completed.
+     */
+    protected def tryAwait(atMost: Duration): Boolean = if (!isCompleted) {
       import Duration.Undefined
       import scala.concurrent.Future.InternalCallbackExecutor
       atMost match {
@@ -108,42 +172,81 @@ private[concurrent] object Promise {
     def result(atMost: Duration)(implicit permit: CanAwait): T =
       ready(atMost).value.get.get // ready throws TimeoutException if timeout so value.get is safe here
 
+    @tailrec
     def value: Option[Try[T]] = getState match {
       case c: Try[_] => Some(c.asInstanceOf[Try[T]])
+      case _: DefaultPromise[_] => canonical().value
       case _ => None
     }
 
-    override def isCompleted: Boolean = getState.isInstanceOf[Try[_]]
+    @tailrec
+    override def isCompleted: Boolean = getState match {
+      case _: Try[_] => true
+      case _: DefaultPromise[_] => canonical().isCompleted
+      case _ => false
+    }
 
     def tryComplete(value: Try[T]): Boolean = {
       val resolved = resolveTry(value)
-      @tailrec
-        def tryComplete(v: Try[T]): List[CallbackRunnable[T]] = {
-          getState match {
-            case raw: List[_] =>
-              val cur = raw.asInstanceOf[List[CallbackRunnable[T]]]
-              if (updateState(cur, v)) cur else tryComplete(v)
-            case _ => null
-          }
-        }
-      tryComplete(resolved) match {
+      tryCompleteAndGetListeners(resolved) match {
         case null             => false
         case rs if rs.isEmpty => true
         case rs               => rs.foreach(r => r.executeWithValue(resolved)); true
       }
     }
 
+    /** Called by `tryComplete` to store the resolved value and get the list of
+     *  listeners, or `null` if it is already completed.
+     */
+    @tailrec
+    private def tryCompleteAndGetListeners(v: Try[T]): List[CallbackRunnable[T]] = {
+      getState match {
+        case raw: List[_] =>
+          val cur = raw.asInstanceOf[List[CallbackRunnable[T]]]
+          if (updateState(cur, v)) cur else tryCompleteAndGetListeners(v)
+        case _: DefaultPromise[_] =>
+          canonical().tryCompleteAndGetListeners(v)
+        case _ => null
+      }
+    }
+
     def onComplete[U](func: Try[T] => U)(implicit executor: ExecutionContext): Unit = {
       val preparedEC = executor.prepare
       val runnable = new CallbackRunnable[T](preparedEC, func)
+      dispatchOrAddCallback(runnable)
+    }
 
-      @tailrec //Tries to add the callback, if already completed, it dispatches the callback to be executed
-      def dispatchOrAddCallback(): Unit =
-        getState match {
-          case r: Try[_]          => runnable.executeWithValue(r.asInstanceOf[Try[T]])
-          case listeners: List[_] => if (updateState(listeners, runnable :: listeners)) () else dispatchOrAddCallback()
-        }
-      dispatchOrAddCallback()
+    /** Tries to add the callback, if already completed, it dispatches the callback to be executed
+     */
+    @tailrec
+    private def dispatchOrAddCallback(runnable: CallbackRunnable[T]): Unit = {
+      getState match {
+        case r: Try[_]          => runnable.executeWithValue(r.asInstanceOf[Try[T]])
+        case _: DefaultPromise[_] => canonical().dispatchOrAddCallback(runnable)
+        case listeners: List[_] => if (updateState(listeners, runnable :: listeners)) () else dispatchOrAddCallback(runnable)
+      }
+    }
+
+    /** Link this promise to another promise so that the other promise becomes the canonical
+     *  promise for this promise. Listeners will be added/dispatched to that promise once the
+     *  link is in place.
+     *
+     *  If this promise is already completed, the same effect as linking is achieved by simply
+     *  copying this promise's result to the target promise.
+     */
+    @tailrec
+    def link(target: DefaultPromise[T]): Unit = {
+      if (this eq target) return
+
+      getState match {
+        case r: Try[_] =>
+          if (!target.tryComplete(r.asInstanceOf[Try[T]])) throw new IllegalStateException("Cannot link completed promises together")
+        case _: DefaultPromise[_] =>
+          canonical().link(target)
+        case listeners: List[_] => if (updateState(listeners, target)) {
+          if (!listeners.isEmpty) listeners.asInstanceOf[List[CallbackRunnable[T]]].foreach(target.dispatchOrAddCallback(_))
+        } else link(target)
+      }
     }
   }
 

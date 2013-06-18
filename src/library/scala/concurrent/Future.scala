@@ -269,16 +269,23 @@ trait Future[+T] extends Awaitable[T] {
    *  $forComprehensionExamples
    */
   def flatMap[S](f: T => Future[S])(implicit executor: ExecutionContext): Future[S] = {
-    val p = Promise[S]()
+    import impl.Promise.DefaultPromise
+    val p = new DefaultPromise[S]()
 
     onComplete {
       case f: Failure[_] => p complete f.asInstanceOf[Failure[S]]
       case Success(v) =>
         try {
-          f(v).onComplete({
-            case f: Failure[_] => p complete f.asInstanceOf[Failure[S]]
-            case Success(v) => p success v
-          })(internalExecutor)
+          f(v) match {
+            case dp: DefaultPromise[_] =>
+              // Link DefaultPromises to avoid space leaks
+              dp.asInstanceOf[DefaultPromise[S]].link(p.canonical())
+            case fut =>
+              fut.onComplete({
+                case f: Failure[_] => p complete f.asInstanceOf[Failure[S]]
+                case Success(v) => p success v
+              })(internalExecutor)
+          }
         } catch {
           case NonFatal(t) => p failure t
         }
