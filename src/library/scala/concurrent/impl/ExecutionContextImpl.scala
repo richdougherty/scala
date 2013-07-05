@@ -13,12 +13,12 @@ package scala.concurrent.impl
 import java.util.concurrent.{ LinkedBlockingQueue, Callable, Executor, ExecutorService, Executors, ThreadFactory, TimeUnit, ThreadPoolExecutor }
 import java.util.Collection
 import scala.concurrent.forkjoin._
-import scala.concurrent.{ BlockContext, ExecutionContext, Awaitable, CanAwait, ExecutionContextExecutor, ExecutionContextExecutorService }
+import scala.concurrent.{ BlockContext, ExecutionContext, Awaitable, CanAwait, PreparedExecutionContextExecutor, PreparedExecutionContextExecutorService }
 import scala.util.control.NonFatal
 
 
 
-private[scala] class ExecutionContextImpl private[impl] (es: Executor, reporter: Throwable => Unit) extends ExecutionContextExecutor {
+private[scala] class ExecutionContextImpl private[impl] (es: Executor, reporter: Throwable => Unit) extends PreparedExecutionContextExecutor {
   // Placed here since the creation of the executor needs to read this val
   private[this] val uncaughtExceptionHandler: Thread.UncaughtExceptionHandler = new Thread.UncaughtExceptionHandler {
     def uncaughtException(thread: Thread, cause: Throwable): Unit = reporter(cause)
@@ -130,8 +130,8 @@ private[concurrent] object ExecutionContextImpl {
         }
 
   def fromExecutor(e: Executor, reporter: Throwable => Unit = ExecutionContext.defaultReporter): ExecutionContextImpl = new ExecutionContextImpl(e, reporter)
-  def fromExecutorService(es: ExecutorService, reporter: Throwable => Unit = ExecutionContext.defaultReporter): ExecutionContextImpl with ExecutionContextExecutorService =
-    new ExecutionContextImpl(es, reporter) with ExecutionContextExecutorService {
+  def fromExecutorService(es: ExecutorService, reporter: Throwable => Unit = ExecutionContext.defaultReporter): ExecutionContextImpl with PreparedExecutionContextExecutorService =
+    new ExecutionContextImpl(es, reporter) with PreparedExecutionContextExecutorService {
       final def asExecutorService: ExecutorService = executor.asInstanceOf[ExecutorService]
       override def execute(command: Runnable) = executor.execute(command)
       override def shutdown() { asExecutorService.shutdown() }
