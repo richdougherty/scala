@@ -112,6 +112,7 @@ trait Future[+T] extends Awaitable[T] {
    *  $multipleCallbacks
    *  $callbackInContext
    */
+  @deprecated("Use of callbacks is discouraged, use ´foreach´ instead.", "2.12")
   def onSuccess[U](pf: PartialFunction[T, U])(implicit executor: ExecutionContext): Unit = onComplete {
     case Success(v) =>
       pf.applyOrElse[T, Any](v, Predef.conforms[T]) // Exploiting the cached function to avoid MatchError
@@ -131,6 +132,7 @@ trait Future[+T] extends Awaitable[T] {
    *  $multipleCallbacks
    *  $callbackInContext
    */
+  @deprecated("use `onComplete` and filter for Failure instead.", "2.12")
   def onFailure[U](@deprecatedName('callback) pf: PartialFunction[Throwable, U])(implicit executor: ExecutionContext): Unit = onComplete {
     case Failure(t) =>
       pf.applyOrElse[Throwable, Any](t, Predef.conforms[Throwable]) // Exploiting the cached function to avoid MatchError
