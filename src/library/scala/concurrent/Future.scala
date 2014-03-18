@@ -162,7 +162,9 @@ trait Future[+T] extends Awaitable[T] {
    */
   def isCompleted: Boolean
 
-  /** The value of this `Future`.
+  /** The current value of this `Future`.
+   *
+   *  $nonDeterministic
    *
    *  If the future is not completed the returned value will be `None`.
    *  If the future is completed the value will be `Some(Success(t))`
@@ -186,15 +188,11 @@ trait Future[+T] extends Awaitable[T] {
    *  Blocking on this future returns a value if the original future is completed with an exception
    *  and throws a corresponding exception if the original future fails.
    */
-  def failed: Future[Throwable] = {
-    implicit val ec = internalExecutor
-    val p = Promise[Throwable]()
-    onComplete {
-      case Failure(t) => p success t
-      case Success(v) => p failure (new NoSuchElementException("Future.failed not completed with a throwable."))
-    }
-    p.future
-  }
+  def failed: Future[Throwable] =
+    transform({
+      case Failure(t) => Success(t)
+      case Success(v) => Failure(new NoSuchElementException("Future.failed not completed with a throwable."))
+    })(internalExecutor)
 
 
   /* Monadic operations */
@@ -216,15 +214,45 @@ trait Future[+T] extends Awaitable[T] {
    *             the returned future
    *  @return    a future that will be completed with the transformed value
    */
-  def transform[S](s: T => S, f: Throwable => Throwable)(implicit executor: ExecutionContext): Future[S] = {
+  def transform[S](s: T => S, f: Throwable => Throwable)(implicit executor: ExecutionContext): Future[S] = 
+    transform {
+      case Success(r) => Try(s(r))
+      case Failure(t) => Try(throw f(t)) // will throw fatal errors!
+    }
+
+  /** Creates a new Future by applying the speficied function to the result
+   * of this Future. If there is any non-fatal exception thrown when 'f'
+   * is applied then that exception will be propagated to the resulting future.
+   *
+   *  @param  f  function that transforms the result of this future
+   *  @return    a future that will be completed with the transformed value
+   */
+  def transform[S](f: Try[T] => Try[S])(implicit executor: ExecutionContext): Future[S] = {
     val p = Promise[S]()
-    // transform on Try has the wrong shape for us here
+    onComplete { result => p.complete(try f(result) catch { case NonFatal(t) => Failure(t) }) }
+    p.future
+  }
+
+  /** Creates a new Future by applying the speficied function, which produces a Future, to the result
+   * of this Future. If there is any non-fatal exception thrown when 'f'
+   * is applied then that exception will be propagated to the resulting future.
+   *
+   *  @param  f  function that transforms the result of this future
+   *  @return    a future that will be completed with the transformed value
+   */
+  def transformWith[S](f: Try[T] => Future[S])(implicit executor: ExecutionContext): Future[S] = {
+    import impl.Promise.DefaultPromise
+    val p = new DefaultPromise[S]()
     onComplete {
-      case Success(r) => p complete Try(s(r))
-      case Failure(t) => p complete Try(throw f(t)) // will throw fatal errors!
+      v => try f(v) match {
+        // If possible, link DefaultPromises to avoid space leaks
+        case dp: DefaultPromise[_] if dp ne this => dp.asInstanceOf[DefaultPromise[S]].linkRootOf(p)
+        case fut => fut.onComplete(p.complete)(internalExecutor)
+      } catch { case NonFatal(t) => p failure t }
     }
     p.future
   }
+
 
   /** Creates a new future by applying a function to the successful result of
    *  this future. If this future is completed with an exception then the new
@@ -232,11 +260,7 @@ trait Future[+T] extends Awaitable[T] {
    *
    *  $forComprehensionExamples
    */
-  def map[S](f: T => S)(implicit executor: ExecutionContext): Future[S] = { // transform(f, identity)
-    val p = Promise[S]()
-    onComplete { v => p complete (v map f) }
-    p.future
-  }
+  def map[S](f: T => S)(implicit executor: ExecutionContext): Future[S] = transform(_.map(f))
 
   /** Creates a new future by applying a function to the successful result of
    *  this future, and returns the result of the function as the new future.
@@ -245,19 +269,16 @@ trait Future[+T] extends Awaitable[T] {
    *
    *  $forComprehensionExamples
    */
-  def flatMap[S](f: T => Future[S])(implicit executor: ExecutionContext): Future[S] = {
-    import impl.Promise.DefaultPromise
-    val p = new DefaultPromise[S]()
-    onComplete {
-      case f: Failure[_] => p complete f.asInstanceOf[Failure[S]]
-      case Success(v) => try f(v) match {
-        // If possible, link DefaultPromises to avoid space leaks
-        case dp: DefaultPromise[_] => dp.asInstanceOf[DefaultPromise[S]].linkRootOf(p)
-        case fut => fut.onComplete(p.complete)(internalExecutor)
-      } catch { case NonFatal(t) => p failure t }
-    }
-    p.future
+  def flatMap[S](f: T => Future[S])(implicit executor: ExecutionContext): Future[S] = transformWith {
+    case Success(s) => f(s)
+    case Failure(_) => this.asInstanceOf[Future[S]]
   }
+
+  /** Creates a new future with one level of nesting flattened, this method is equivalent
+   * to `flatMap(identity)`.
+   *
+   */
+  def flatten[S](implicit ev: T <:< Future[S]): Future[S] = flatMap(ev)(internalExecutor)
 
   /** Creates a new future by filtering the value of the current future with a predicate.
    *
@@ -276,9 +297,7 @@ trait Future[+T] extends Awaitable[T] {
    *  }}}
    */
   def filter(@deprecatedName('pred) p: T => Boolean)(implicit executor: ExecutionContext): Future[T] =
-    map {
-      r => if (p(r)) r else throw new NoSuchElementException("Future.filter predicate is not satisfied")
-    }
+    map { r => if (p(r)) r else throw new NoSuchElementException("Future.filter predicate is not satisfied") }
 
   /** Used by for-comprehensions.
    */
@@ -321,11 +340,8 @@ trait Future[+T] extends Awaitable[T] {
    *  Future (6 / 2) recover { case e: ArithmeticException => 0 } // result: 3
    *  }}}
    */
-  def recover[U >: T](pf: PartialFunction[Throwable, U])(implicit executor: ExecutionContext): Future[U] = {
-    val p = Promise[U]()
-    onComplete { v => p complete (v recover pf) }
-    p.future
-  }
+  def recover[U >: T](pf: PartialFunction[Throwable, U])(implicit executor: ExecutionContext): Future[U] = 
+    transform { _ recover pf }
 
   /** Creates a new future that will handle any matching throwable that this
    *  future might contain by assigning it a value of another future.
@@ -340,14 +356,11 @@ trait Future[+T] extends Awaitable[T] {
    *  Future (6 / 0) recoverWith { case e: ArithmeticException => f } // result: Int.MaxValue
    *  }}}
    */
-  def recoverWith[U >: T](pf: PartialFunction[Throwable, Future[U]])(implicit executor: ExecutionContext): Future[U] = {
-    val p = Promise[U]()
-    onComplete {
-      case Failure(t) => try pf.applyOrElse(t, (_: Throwable) => this).onComplete(p.complete)(internalExecutor) catch { case NonFatal(t) => p failure t }
-      case other => p complete other
+  def recoverWith[U >: T](pf: PartialFunction[Throwable, Future[U]])(implicit executor: ExecutionContext): Future[U] =
+    transformWith {
+      case Failure(t) => pf.applyOrElse(t, (_: Throwable) => this)
+      case Success(_) => this
     }
-    p.future
-  }
 
   /** Zips the values of `this` and `that` future, and creates
    *  a new future holding the tuple of their results.
@@ -359,12 +372,7 @@ trait Future[+T] extends Awaitable[T] {
    */
   def zip[U](that: Future[U]): Future[(T, U)] = {
     implicit val ec = internalExecutor
-    val p = Promise[(T, U)]()
-    onComplete {
-      case f: Failure[_] => p complete f.asInstanceOf[Failure[(T, U)]]
-      case Success(s) => that onComplete { c => p.complete(c map { s2 => (s, s2) }) }
-    }
-    p.future
+    flatMap { r1 => that.map(r2 => (r1, r2)) }
   }
 
   /** Creates a new future which holds the result of this future if it was completed successfully, or, if not,
@@ -383,15 +391,7 @@ trait Future[+T] extends Awaitable[T] {
    */
   def fallbackTo[U >: T](that: Future[U]): Future[U] = {
     implicit val ec = internalExecutor
-    val p = Promise[U]()
-    onComplete {
-      case s @ Success(_) => p complete s
-      case f @ Failure(_) => that onComplete {
-        case s2 @ Success(_) => p complete s2
-        case _ => p complete f // Use the first failure as the failure
-      }
-    }
-    p.future
+    recoverWith { case _ => that } recoverWith { case _ => this }
   }
 
   /** Creates a new `Future[S]` which is completed with this `Future`'s result if
