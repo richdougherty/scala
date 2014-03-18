@@ -14,6 +14,12 @@ import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+
+import scala.concurrent.util.Updaters;
+
 /**
  * An unbounded {@link TransferQueue} based on linked nodes.
  * This queue orders elements FIFO (first-in-first-out) with respect
@@ -424,12 +430,12 @@ public class LinkedTransferQueue<E> extends AbstractQueue<E>
 
         // CAS methods for fields
         final boolean casNext(Node cmp, Node val) {
-            return UNSAFE.compareAndSwapObject(this, nextOffset, cmp, val);
+            return nextUpdater.compareAndSet(this, cmp, val);
         }
 
         final boolean casItem(Object cmp, Object val) {
             // assert cmp == null || cmp.getClass() != Node.class;
-            return UNSAFE.compareAndSwapObject(this, itemOffset, cmp, val);
+            return itemUpdater.compareAndSet(this, cmp, val);
         }
 
         /**
@@ -437,7 +443,7 @@ public class LinkedTransferQueue<E> extends AbstractQueue<E>
          * only be seen after publication via casNext.
          */
         Node(Object item, boolean isData) {
-            UNSAFE.putObject(this, itemOffset, item); // relaxed write
+            relaxedSetItem(this, item);
             this.isData = isData;
         }
 
@@ -446,7 +452,7 @@ public class LinkedTransferQueue<E> extends AbstractQueue<E>
          * only after CASing head field, so uses relaxed write.
          */
         final void forgetNext() {
-            UNSAFE.putObject(this, nextOffset, this);
+            relaxedSetNext(this, this);
         }
 
         /**
@@ -459,8 +465,8 @@ public class LinkedTransferQueue<E> extends AbstractQueue<E>
          * else we don't care).
          */
         final void forgetContents() {
-            UNSAFE.putObject(this, itemOffset, this);
-            UNSAFE.putObject(this, waiterOffset, null);
+            relaxedSetItem(this, this);
+            relaxedSetWaiter(this, null);
         }
 
         /**
@@ -505,21 +511,42 @@ public class LinkedTransferQueue<E> extends AbstractQueue<E>
 
         private static final long serialVersionUID = -3375979862319811754L;
 
-        // Unsafe mechanics
-        private static final sun.misc.Unsafe UNSAFE;
-        private static final long itemOffset;
-        private static final long nextOffset;
-        private static final long waiterOffset;
+        private static final AtomicReferenceFieldUpdater<Node, Object> itemUpdater;
+        private static final AtomicReferenceFieldUpdater<Node, Node> nextUpdater;
+        private static final AtomicReferenceFieldUpdater<Node, Thread> waiterUpdater;
+        private static final Updaters.UnsafeAtomicReferenceFieldUpdater<Node, Object> unsafeItemUpdater;
+        private static final Updaters.UnsafeAtomicReferenceFieldUpdater<Node, Node> unsafeNextUpdater;
+        private static final Updaters.UnsafeAtomicReferenceFieldUpdater<Node, Thread> unsafeWaiterUpdater;
+
+        private static final void relaxedSetItem(final Node node, final Object newValue) {
+          if (unsafeItemUpdater == null) itemUpdater.set(node, newValue);
+          else unsafeItemUpdater.relaxedSet(node, newValue);
+        }
+
+        private static final void relaxedSetNext(final Node node, final Node newValue) {
+          if (unsafeNextUpdater == null) nextUpdater.set(node, newValue);
+          else unsafeNextUpdater.relaxedSet(node, newValue);
+        }
+
+        private static final void relaxedSetWaiter(final Node node, final Thread newValue) {
+          if (unsafeWaiterUpdater == null) waiterUpdater.set(node, newValue);
+          else unsafeWaiterUpdater.relaxedSet(node, newValue);
+        }
+
         static {
             try {
-                UNSAFE = getUnsafe();
-                Class<?> k = Node.class;
-                itemOffset = UNSAFE.objectFieldOffset
-                    (k.getDeclaredField("item"));
-                nextOffset = UNSAFE.objectFieldOffset
-                    (k.getDeclaredField("next"));
-                waiterOffset = UNSAFE.objectFieldOffset
-                    (k.getDeclaredField("waiter"));
+               itemUpdater = Updaters.newReferenceUpdater(Node.class, Object.class, "item");
+               nextUpdater = Updaters.newReferenceUpdater(Node.class, Node.class, "next");
+               waiterUpdater = Updaters.newReferenceUpdater(Node.class, Thread.class, "waiter");
+               unsafeItemUpdater =
+                 (itemUpdater instanceof Updaters.UnsafeAtomicReferenceFieldUpdater) ?
+                 (Updaters.UnsafeAtomicReferenceFieldUpdater<Node, Object>)itemUpdater : null;
+               unsafeNextUpdater =
+                 (nextUpdater instanceof Updaters.UnsafeAtomicReferenceFieldUpdater) ?
+                 (Updaters.UnsafeAtomicReferenceFieldUpdater<Node, Node>)nextUpdater : null;
+               unsafeWaiterUpdater =
+                 (waiterUpdater instanceof Updaters.UnsafeAtomicReferenceFieldUpdater) ?
+                 (Updaters.UnsafeAtomicReferenceFieldUpdater<Node, Thread>)waiterUpdater : null;
             } catch (Exception e) {
                 throw new Error(e);
             }
@@ -537,15 +564,15 @@ public class LinkedTransferQueue<E> extends AbstractQueue<E>
 
     // CAS methods for fields
     private boolean casTail(Node cmp, Node val) {
-        return UNSAFE.compareAndSwapObject(this, tailOffset, cmp, val);
+        return tailUpdater.compareAndSet(this, cmp, val);
     }
 
     private boolean casHead(Node cmp, Node val) {
-        return UNSAFE.compareAndSwapObject(this, headOffset, cmp, val);
+        return headUpdater.compareAndSet(this, cmp, val);
     }
 
     private boolean casSweepVotes(int cmp, int val) {
-        return UNSAFE.compareAndSwapInt(this, sweepVotesOffset, cmp, val);
+        return sweepUpdater.compareAndSet(this, cmp, val);
     }
 
     /*
@@ -1301,35 +1328,16 @@ public class LinkedTransferQueue<E> extends AbstractQueue<E>
     }
 
     // Unsafe mechanics
-
-    private static final sun.misc.Unsafe UNSAFE;
-    private static final long headOffset;
-    private static final long tailOffset;
-    private static final long sweepVotesOffset;
+    private static final AtomicReferenceFieldUpdater<LinkedTransferQueue, Node> headUpdater;
+    private static final AtomicReferenceFieldUpdater<LinkedTransferQueue, Node> tailUpdater;
+    private static final AtomicIntegerFieldUpdater<LinkedTransferQueue> sweepUpdater;
     static {
         try {
-            UNSAFE = getUnsafe();
-            Class<?> k = LinkedTransferQueue.class;
-            headOffset = UNSAFE.objectFieldOffset
-                (k.getDeclaredField("head"));
-            tailOffset = UNSAFE.objectFieldOffset
-                (k.getDeclaredField("tail"));
-            sweepVotesOffset = UNSAFE.objectFieldOffset
-                (k.getDeclaredField("sweepVotes"));
+            headUpdater = Updaters.newReferenceUpdater(LinkedTransferQueue.class, Node.class, "head");
+            tailUpdater = Updaters.newReferenceUpdater(LinkedTransferQueue.class, Node.class, "tail");
+            sweepUpdater = Updaters.newIntegerUpdater(LinkedTransferQueue.class, "sweepVotes");
         } catch (Exception e) {
             throw new Error(e);
         }
     }
-
-    /**
-     * Returns a sun.misc.Unsafe.  Suitable for use in a 3rd party package.
-     * Replace with a simple call to Unsafe.getUnsafe when integrating
-     * into a jdk.
-     *
-     * @return a sun.misc.Unsafe
-     */
-    static sun.misc.Unsafe getUnsafe() {
-        return scala.concurrent.util.Unsafe.instance;
-    }
-
 }
