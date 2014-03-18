@@ -75,13 +75,13 @@ public final class Updaters {
 
 
 
-  private static final class UnsafeAtomicReferenceFieldUpdater<T, V> extends AtomicReferenceFieldUpdater<T, V> {
+  public static final class UnsafeAtomicReferenceFieldUpdater<T, V> extends AtomicReferenceFieldUpdater<T, V> {
     private final Class<? extends T> ownerType;
     private final Class<? extends V> fieldType;
     private final String fieldName;
     private final long fieldOffset;
 
-    public UnsafeAtomicReferenceFieldUpdater(final Class<? extends T> ownerType,
+    UnsafeAtomicReferenceFieldUpdater(final Class<? extends T> ownerType,
                                              final Class<? extends V> fieldType,
                                              final String fieldName) {
       this.fieldOffset = Updaters.getFieldOffset(ownerType, fieldType, fieldName);
@@ -109,6 +109,10 @@ public final class Updaters {
       return (V)Unsafe.instance.getObjectVolatile(obj, fieldOffset);
     }
 
+    public final V relaxedGet(final T obj) {
+      return (V)Unsafe.instance.getObject(obj, fieldOffset);
+    }
+
     @Override
     public final void set(final T obj, final V newValue) {
       Unsafe.instance.putObjectVolatile(obj, fieldOffset, newValue);
@@ -117,6 +121,10 @@ public final class Updaters {
     @Override
     public final void lazySet(final T obj, final V newValue) {
       Unsafe.instance.putOrderedObject(obj, fieldOffset, newValue);
+    }
+
+    public final void relaxedSet(final T obj, final V newValue) {
+      Unsafe.instance.putObject(obj, fieldOffset, newValue);
     }
 
     @Override
@@ -134,12 +142,12 @@ public final class Updaters {
 
 
 
-  private static final class UnsafeAtomicLongFieldUpdater<T> extends AtomicLongFieldUpdater<T> {
+  public static final class UnsafeAtomicLongFieldUpdater<T> extends AtomicLongFieldUpdater<T> {
     private final Class<? extends T> ownerType;
     private final String fieldName;
     private final long fieldOffset;
 
-    public UnsafeAtomicLongFieldUpdater(final Class<? extends T> ownerType, final String fieldName) {
+    UnsafeAtomicLongFieldUpdater(final Class<? extends T> ownerType, final String fieldName) {
       this.fieldOffset = Updaters.getFieldOffset(ownerType, long.class, fieldName);
       this.ownerType = ownerType;
       this.fieldName = fieldName;
@@ -163,6 +171,10 @@ public final class Updaters {
     
     @Override public final long get(final T obj) {
       return Unsafe.instance.getLongVolatile(obj, fieldOffset);
+    }
+
+    public final long relaxedGet(final T obj) {
+      return Unsafe.instance.getLong(obj, fieldOffset);
     }
     
     @Override public final long getAndAdd(final T obj, final long delta) {
@@ -195,6 +207,10 @@ public final class Updaters {
     @Override public final void lazySet(final T obj, final long newValue) {
       Unsafe.instance.putOrderedLong(obj, fieldOffset, newValue);
     }
+
+    public final void relaxedSet(final T obj, final long newValue) {
+      Unsafe.instance.putLong(obj, fieldOffset, newValue);
+    }
     
     @Override public final void set(final T obj, final long newValue) {
       Unsafe.instance.putLongVolatile(obj, fieldOffset, newValue);
@@ -213,12 +229,12 @@ public final class Updaters {
 
 
 
-  private static final class UnsafeAtomicIntegerFieldUpdater<T> extends AtomicIntegerFieldUpdater<T> {
+  public static final class UnsafeAtomicIntegerFieldUpdater<T> extends AtomicIntegerFieldUpdater<T> {
     private final Class<? extends T> ownerType;
     private final String fieldName;
     private final long fieldOffset;
 
-    public UnsafeAtomicIntegerFieldUpdater(final Class<? extends T> ownerType, final String fieldName) {
+    UnsafeAtomicIntegerFieldUpdater(final Class<? extends T> ownerType, final String fieldName) {
       this.fieldOffset = Updaters.getFieldOffset(ownerType, int.class, fieldName);
       this.ownerType = ownerType;
       this.fieldName = fieldName;
@@ -242,6 +258,10 @@ public final class Updaters {
     
     @Override public final int get(final T obj) {
       return Unsafe.instance.getIntVolatile(obj, fieldOffset);
+    }
+
+    public final int relaxedGet(final T obj) {
+      return Unsafe.instance.getInt(obj, fieldOffset);
     }
     
     @Override public final int getAndAdd(final T obj, final int delta) {
@@ -273,6 +293,10 @@ public final class Updaters {
 
     @Override public final void lazySet(final T obj, final int newValue) {
       Unsafe.instance.putOrderedInt(obj, fieldOffset, newValue);
+    }
+
+    public final void relaxedSet(final T obj, final int newValue) {
+      Unsafe.instance.putInt(obj, fieldOffset, newValue);
     }
     
     @Override public final void set(final T obj, final int newValue) {
