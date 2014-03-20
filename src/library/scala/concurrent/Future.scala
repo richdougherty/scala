@@ -472,14 +472,14 @@ trait Future[+T] extends Awaitable[T] {
    *  @param pf     a `PartialFunction` which will be conditionally applied to the outcome of this `Future`
    *  @return       a `Future` which will be completed with the exact same outcome as this `Future` but after the `PartialFunction` has been executed.
    */
-  def andThen[U](pf: PartialFunction[Try[T], U])(implicit executor: ExecutionContext): Future[T] = {
-    val p = Promise[T]()
-    onComplete {
-      case r => try pf.applyOrElse[Try[T], Any](r, Predef.conforms[Try[T]]) finally p complete r
-    }
-    p.future
-  }
+  def andThen[U](pf: PartialFunction[Try[T], U])(implicit executor: ExecutionContext): Future[T] =
+    transform {
+      result =>
+        try pf.applyOrElse[Try[T], Any](result, Predef.conforms[Try[T]])
+        catch { case NonFatal(t) => executor reportFailure t }
 
+        result
+    }
 }
 
 
