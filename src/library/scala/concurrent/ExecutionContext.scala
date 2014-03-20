@@ -72,8 +72,8 @@ trait ExecutionContext {
    *  execution context. A valid implementation of `prepare` is one
    *  that simply returns `this`.
    */
+  @deprecated("Preparation of ExecutionContexts will be removed.", "2.12")
   def prepare(): ExecutionContext = this
-
 }
 
 /**
