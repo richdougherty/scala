@@ -91,14 +91,7 @@ import scala.reflect.ClassTag
  * `execute()` either immediately or asynchronously.
  */
 trait Future[+T] extends Awaitable[T] {
-
-  // The executor within the lexical scope
-  // of the Future trait. Note that this will
-  // (modulo bugs) _never_ execute a callback
-  // other than those below in this same file.
-  //
-  // See the documentation on `InternalCallbackExecutor` for more details.
-  private def internalExecutor = Future.InternalCallbackExecutor
+  import Future.{ InternalCallbackExecutor => internalExecutor }
 
   /* Callbacks */
 
