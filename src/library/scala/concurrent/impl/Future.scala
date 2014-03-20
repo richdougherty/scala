@@ -19,7 +19,7 @@ private[concurrent] object Future {
   class PromiseCompletingRunnable[T](body: => T) extends Runnable {
     val promise = new Promise.DefaultPromise[T]()
 
-    override def run() = {
+    override def run(): Unit = {
       promise complete {
         try Success(body) catch { case NonFatal(e) => Failure(e) }
       }

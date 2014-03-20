@@ -19,6 +19,28 @@ import java.util.concurrent.locks.AbstractQueuedSynchronizer
 
 private[concurrent] trait Promise[T] extends scala.concurrent.Promise[T] with scala.concurrent.Future[T] {
   def future: this.type = this
+
+  import scala.concurrent.Future
+  import scala.concurrent.impl.Promise.DefaultPromise
+
+  override def transform[S](f: Try[T] => Try[S])(implicit executor: ExecutionContext): Future[S] = {
+    val p = new DefaultPromise[S]()
+    onComplete { result => p.complete(try f(result) catch { case NonFatal(t) => Failure(t) }) }
+    p.future
+  }
+
+  // If possible, link DefaultPromises to avoid space leaks
+  override def transformWith[S](f: Try[T] => Future[S])(implicit executor: ExecutionContext): Future[S] = {
+    val p = new DefaultPromise[S]()
+    onComplete {
+      v => try f(v) match {
+        case fut if fut eq this => p complete v.asInstanceOf[Try[S]]
+        case dp: DefaultPromise[_] => dp.asInstanceOf[DefaultPromise[S]].linkRootOf(p)
+        case fut => p completeWith fut
+      } catch { case NonFatal(t) => p failure t }
+    }
+    p.future
+  }
 }
 
 /* Precondition: `executor` is prepared, i.e., `executor` has been returned from invocation of `prepare` on some other `ExecutionContext`.
@@ -284,7 +306,7 @@ private[concurrent] object Promise {
     }
 
     /** Link this promise to the root of another promise using `link()`. Should only be
-     *  be called by Future.flatMap.
+     *  be called by transformWith.
      */
     protected[concurrent] final def linkRootOf(target: DefaultPromise[T]): Unit = link(target.compressedRoot())
 

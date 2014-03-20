@@ -228,11 +228,7 @@ trait Future[+T] extends Awaitable[T] {
    *  @param  f  function that transforms the result of this future
    *  @return    a future that will be completed with the transformed value
    */
-  def transform[S](f: Try[T] => Try[S])(implicit executor: ExecutionContext): Future[S] = {
-    val p = Promise[S]()
-    onComplete { result => p.complete(try f(result) catch { case NonFatal(t) => Failure(t) }) }
-    p.future
-  }
+  def transform[S](f: Try[T] => Try[S])(implicit executor: ExecutionContext): Future[S]
 
   /** Creates a new Future by applying the speficied function, which produces a Future, to the result
    * of this Future. If there is any non-fatal exception thrown when 'f'
@@ -242,18 +238,7 @@ trait Future[+T] extends Awaitable[T] {
    *  @param  f  function that transforms the result of this future
    *  @return    a future that will be completed with the transformed value
    */
-  def transformWith[S](f: Try[T] => Future[S])(implicit executor: ExecutionContext): Future[S] = {
-    import impl.Promise.DefaultPromise
-    val p = new DefaultPromise[S]()
-    onComplete {
-      v => try f(v) match {
-        // If possible, link DefaultPromises to avoid space leaks
-        case dp: DefaultPromise[_] if dp ne this => dp.asInstanceOf[DefaultPromise[S]].linkRootOf(p)
-        case fut => fut.onComplete(p.complete)(internalExecutor)
-      } catch { case NonFatal(t) => p failure t }
-    }
-    p.future
-  }
+  def transformWith[S](f: Try[T] => Future[S])(implicit executor: ExecutionContext): Future[S]
 
 
   /** Creates a new future by applying a function to the successful result of
