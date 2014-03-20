@@ -26,12 +26,6 @@ import scala.util.{ Try, Success, Failure }
  *  Note: Using this method may result in non-deterministic concurrent programs.
  */
 trait Promise[T] {
-
-  // used for internal callbacks defined in
-  // the lexical scope of this trait;
-  // _never_ for application callbacks.
-  private implicit def internalExecutor: ExecutionContext = Future.InternalCallbackExecutor
-
   /** Future containing the value of this promise.
    */
   def future: Future[T]
