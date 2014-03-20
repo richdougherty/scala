@@ -61,7 +61,9 @@ trait Promise[T] {
    *  @return   This promise
    */
   final def completeWith(other: Future[T]): this.type = {
-    other onComplete { this complete _ }
+    if (other ne this.future) { // this completeWith this doesn't make much sense
+      other.onComplete(this complete _)(Future.InternalCallbackExecutor)
+    }
     this
   }
 
@@ -70,7 +72,9 @@ trait Promise[T] {
    *  @return   This promise
    */
   final def tryCompleteWith(other: Future[T]): this.type = {
-    other onComplete { this tryComplete _ }
+    if (other ne this.future) { // this completeWith this doesn't make much sense
+      other.onComplete(this tryComplete _)(Future.InternalCallbackExecutor)
+    }
     this
   }
 
