@@ -9,9 +9,10 @@ object ErrorProps extends QuasiquoteProperties("errors") {
     """)
 
   property("can't unquote with given rank") = fails(
-    "Can't unquote List[reflect.runtime.universe.Ident], consider using ..",
+    "Can't unquote List[StringBuilder], consider using .. or providing an implicit instance of Liftable[List[StringBuilder]]",
     """
-      val xs = List(q"x", q"x")
+      import java.lang.StringBuilder
+      val xs: List[StringBuilder] = Nil
       q"$xs"
     """)
 
@@ -71,9 +72,10 @@ object ErrorProps extends QuasiquoteProperties("errors") {
     """)
 
   property("use ... rank or provide liftable") = fails(
-    "Can't unquote List[List[reflect.runtime.universe.Ident]], consider using ...",
+    "Can't unquote List[List[StringBuilder]], consider using ... or providing an implicit instance of Liftable[List[List[StringBuilder]]]",
     """
-      val xs = List(List(q"x", q"x"))
+      import java.lang.StringBuilder
+      val xs: List[List[StringBuilder]] = Nil
       q"$xs"
     """)
 
@@ -170,6 +172,27 @@ object ErrorProps extends QuasiquoteProperties("errors") {
     "unbound wildcard type",
     """
       tq"_"
+    """)
+
+  property("SI-8420: don't crash on splicing of non-unliftable native type (1)") = fails(
+    "Can't unquote List[reflect.runtime.universe.Symbol] with .., consider omitting the dots or providing an implicit instance of Liftable[reflect.runtime.universe.Symbol]",
+    """
+      val l: List[Symbol] = Nil
+      q"f(..$l)"
+    """)
+
+  property("SI-8420: don't crash on splicing of non-unliftable native type (2)") = fails(
+    "Can't unquote List[reflect.runtime.universe.FlagSet] with .., consider omitting the dots or providing an implicit instance of Liftable[reflect.runtime.universe.FlagSet]",
+    """
+      val l: List[FlagSet] = Nil
+      q"f(..$l)"
+    """)
+
+  property("SI-8420: don't crash on splicing of non-unliftable native type (3)") = fails(
+    "Can't unquote List[reflect.runtime.universe.Modifiers] with .., consider omitting the dots or providing an implicit instance of Liftable[reflect.runtime.universe.Modifiers]",
+    """
+      val l: List[Modifiers] = Nil
+      q"f(..$l)"
     """)
 
   // // Make sure a nice error is reported in this case
