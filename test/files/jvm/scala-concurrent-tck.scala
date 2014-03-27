@@ -165,6 +165,100 @@ def testTransformFailure(): Unit = once {
       g onFailure { case e => done(e eq transformed) }
   }
 
+  def testTransformResultToResult(): Unit = once {
+    done =>
+      Future("foo").transform {
+        case Success(s) => Success(s.toUpperCase)
+        case Failure(f) => throw new Exception("test failed")
+      } onComplete {
+        case Success("FOO") => done(true)
+        case _ => done(false)
+      }
+  }
+
+  def testTransformResultToFailure(): Unit = once {
+    done => 
+      val e = new Exception("expected")
+      Future("foo").transform {
+        case Success(s) => Failure(e)
+        case Failure(f) => throw new Exception("test failed")
+      } onComplete {
+        case Failure(`e`) => done(true)
+        case _ => done(false)
+      }
+  }
+
+  def testTransformFailureToResult(): Unit = once {
+    done =>
+    val e = "foo"
+      Future(new Exception("initial")).transform {
+        case Success(s) => throw new Exception("test failed")
+        case Failure(f) => Success(e)
+      } onComplete {
+        case Success(`e`) => done(true)
+        case _ => done(false)
+      }
+  }
+
+  def testTransformFailureToFailure(): Unit = once {
+    done =>
+      val e = new Exception("expected")
+      Future(new Exception("initial")).transform {
+        case Success(s) => throw new Exception("test failed")
+        case Failure(f) => Failure(e)
+      } onComplete {
+        case Failure(`e`) => done(true)
+        case _ => done(false)
+      }
+  }
+
+    def testTransformWithResultToResult(): Unit = once {
+    done =>
+      Future("foo").transformWith {
+        case Success(s) => Future(s.toUpperCase)
+        case Failure(f) => throw new Exception("test failed")
+      } onComplete {
+        case Success("FOO") => done(true)
+        case _ => done(false)
+      }
+  }
+
+  def testTransformWithResultToFailure(): Unit = once {
+    done => 
+      val e = new Exception("expected")
+      Future("foo").transformWith {
+        case Success(s) => Future(throw e)
+        case Failure(f) => throw new Exception("test failed")
+      } onComplete {
+        case Failure(`e`) => done(true)
+        case _ => done(false)
+      }
+  }
+
+  def testTransformWithFailureToResult(): Unit = once {
+    done =>
+    val e = "foo"
+      Future(new Exception("initial")).transformWith {
+        case Success(s) => throw new Exception("test failed")
+        case Failure(f) => Future(e)
+      } onComplete {
+        case Success(`e`) => done(true)
+        case _ => done(false)
+      }
+  }
+
+  def testTransformWithFailureToFailure(): Unit = once {
+    done =>
+      val e = new Exception("expected")
+      Future(new Exception("initial")).transformWith {
+        case Success(s) => throw new Exception("test failed")
+        case Failure(f) => Future(throw e)
+      } onComplete {
+        case Failure(`e`) => done(true)
+        case _ => done(false)
+      }
+  }
+
   def testFoldFailure(): Unit = once {
     done =>
       val f = Future[Unit] { throw new Exception("expected") }

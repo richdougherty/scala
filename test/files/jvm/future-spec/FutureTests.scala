@@ -218,6 +218,121 @@ class FutureTests extends MinimalScalaTest {
       } mustBe (r)
     }
 
+    "transform results to results" in {
+      val f1 = Future.successful("foo").transform(_.map(_.toUpperCase))
+      val f2 = Future("bar").transform(_.map(_.toUpperCase))
+      Await.result(f1, defaultTimeout) mustBe "FOO"
+      Await.result(f2, defaultTimeout) mustBe "BAR"
+    }
+
+    "transform failures to failures" in {
+      val initial = new Exception("Initial")
+      val expected1 = new Exception("Expected1")
+      val expected2 = new Exception("Expected2")
+      val f1 = Future(throw initial) transform {
+        case Failure(`initial`) => Failure(expected1)
+        case x => x
+      }
+      val f2 = Future.failed(initial) transform {
+        case Failure(`initial`) => Failure(expected2)
+        case x => x
+      }
+
+      intercept[Exception] { Await.result(f1, defaultTimeout) } mustBe expected1
+      intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2
+    }
+
+    "transform failures to results" in {
+      val initial1 = new Exception("Initial1")
+      val initial2 = new Exception("Initial2")
+      val f1 = Future.failed[String](initial1) transform {
+        case Failure(`initial1`) => Success("foo")
+        case x => x
+      }
+      val f2 = Future[String](throw initial2) transform {
+        case Failure(`initial2`) => Success("bar")
+        case x => x
+      }
+      Await.result(f1, defaultTimeout) mustBe "foo"
+      Await.result(f2, defaultTimeout) mustBe "bar"
+    }
+
+    "transform results to failures" in {
+      val expected1 = new Exception("Expected1")
+      val expected2 = new Exception("Expected2")
+      val f1 = Future.successful("foo") transform {
+        case Success("foo") => Failure(expected1)
+        case x => x
+      }
+      val f2 = Future("bar") transform {
+        case Success("bar") => Failure(expected2)
+        case x => x
+      }
+      intercept[Exception] { Await.result(f1, defaultTimeout) } mustBe expected1
+      intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2
+    }
+
+    "transformWith results" in {
+      val f1 = Future.successful("foo").transformWith {
+        case Success(r) => Future(r.toUpperCase)
+        case f @ Failure(_) => Future.fromTry(f)
+      }
+      val f2 = Future("bar").transformWith {
+        case Success(r) => Future(r.toUpperCase)
+        case f @ Failure(_) => Future.fromTry(f)
+      }
+      Await.result(f1, defaultTimeout) mustBe "FOO"
+      Await.result(f2, defaultTimeout) mustBe "BAR"
+    }
+
+    "transformWith failures" in {
+      val initial = new Exception("Initial")
+      val expected1 = new Exception("Expected1")
+      val expected2 = new Exception("Expected2")
+      val f1 = Future[Int](throw initial).transformWith {
+        case Failure(`initial`) => Future failed expected1
+        case x => Future fromTry x
+      }
+      val f2 = Future.failed[Int](initial).transformWith {
+        case Failure(`initial`) => Future failed expected2
+        case x => Future fromTry x
+      }
+
+      intercept[Exception] { Await.result(f1, defaultTimeout) } mustBe expected1
+      intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2
+    }
+
+    "transformWith failures to future success" in {
+      val initial = new Exception("Initial")
+      val f1 = Future.failed[String](initial).transformWith {
+        case Failure(`initial`) => Future("FOO")
+        case _ => Future failed initial
+      }
+      val f2 = Future[String](throw initial).transformWith {
+        case Failure(`initial`) => Future("BAR")
+        case _ => Future failed initial
+      }
+      Await.result(f1, defaultTimeout) mustBe "FOO"
+      Await.result(f2, defaultTimeout) mustBe "BAR"
+    }
+
+    "transformWith results to future failures" in {
+      val initial = new Exception("Initial")
+      val expected1 = new Exception("Expected1")
+      val expected2 = new Exception("Expected2")
+      val f1 = Future[String]("FOO") transformWith {
+        case Success("FOO") => Future failed expected1
+        case _ => Future successful "FOO"
+      }
+      val f2 = Future.successful("FOO") transformWith {
+        case Success("FOO") => Future failed expected2
+        case _ => Future successful "FOO"
+      }
+
+      intercept[Exception] { Await.result(f1, defaultTimeout) } mustBe expected1
+      intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2      
+    }
+
     "andThen like a boss" in {
       val q = new java.util.concurrent.LinkedBlockingQueue[Int]
       for (i <- 1 to 1000) {
