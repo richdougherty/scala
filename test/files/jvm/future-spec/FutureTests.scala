@@ -85,6 +85,20 @@ class FutureTests extends MinimalScalaTest {
       Await.result(f, defaultTimeout) mustBe ("foo")
       Await.result(p.future, defaultTimeout) mustBe (true)
     }
+
+    "have a unit member representing an already completed Future containing Unit" in {
+      assert(Future.unit ne null, "Future.unit must not be null")
+      assert(Future.unit eq Future.unit, "Future.unit must be the same instance as Future.unit")
+      assert(Future.unit.isCompleted, "Future.unit must already be completed")
+      assert(Future.unit.value.get == Success(()), "Future.unit must contain a Success(())")
+    }
+
+    "have a never member representing a never completed Future of Nothing" in {
+      val test: Future[Nothing] = Future.never
+      assert(Future.never ne null, "Future.never must not be null")
+      assert(Future.never eq Future.never, "Future.unit must be the same instance as Future.unit")
+      assert(!Future.never.isCompleted && Future.never.value.isEmpty, "Future.never must never be completed")
+    }
   }
 
   "The default ExecutionContext" should {

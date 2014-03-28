@@ -488,6 +488,14 @@ object Future {
     classOf[Unit]    -> classOf[scala.runtime.BoxedUnit]
   )
 
+  /** A Future which is always completed with the Unit value.
+   */
+  val unit: Future[Unit] = successful(())
+
+  /** A Future which is never completed.
+   */
+  val never: Future[Nothing] = Promise[Nothing]().future
+
   /** Creates an already completed Future with the specified exception.
    *
    *  @tparam T        the type of the value in the future
