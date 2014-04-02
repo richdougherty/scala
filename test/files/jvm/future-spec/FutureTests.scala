@@ -274,6 +274,7 @@ class FutureTests extends MinimalScalaTest {
     "transform results to failures" in {
       val expected1 = new Exception("Expected1")
       val expected2 = new Exception("Expected2")
+      val expected3 = new Exception("Expected3")
       val f1 = Future.successful("foo") transform {
         case Success("foo") => Failure(expected1)
         case x => x
@@ -282,8 +283,13 @@ class FutureTests extends MinimalScalaTest {
         case Success("bar") => Failure(expected2)
         case x => x
       }
+      val f3 = Future("bar") transform {
+        case Success("bar") => throw expected3
+        case x => x
+      }
       intercept[Exception] { Await.result(f1, defaultTimeout) } mustBe expected1
       intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2
+      intercept[Exception] { Await.result(f3, defaultTimeout) } mustBe expected3
     }
 
     "transformWith results" in {
@@ -303,6 +309,8 @@ class FutureTests extends MinimalScalaTest {
       val initial = new Exception("Initial")
       val expected1 = new Exception("Expected1")
       val expected2 = new Exception("Expected2")
+      val expected3 = new Exception("Expected3")
+
       val f1 = Future[Int](throw initial).transformWith {
         case Failure(`initial`) => Future failed expected1
         case x => Future fromTry x
@@ -311,9 +319,14 @@ class FutureTests extends MinimalScalaTest {
         case Failure(`initial`) => Future failed expected2
         case x => Future fromTry x
       }
+      val f3 = Future[Int](throw initial).transformWith {
+        case Failure(`initial`) => throw expected3
+        case x => Future fromTry x
+      }
 
       intercept[Exception] { Await.result(f1, defaultTimeout) } mustBe expected1
       intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2
+      intercept[Exception] { Await.result(f3, defaultTimeout) } mustBe expected3
     }
 
     "transformWith failures to future success" in {
@@ -334,6 +347,8 @@ class FutureTests extends MinimalScalaTest {
       val initial = new Exception("Initial")
       val expected1 = new Exception("Expected1")
       val expected2 = new Exception("Expected2")
+      val expected3 = new Exception("Expected3")
+
       val f1 = Future[String]("FOO") transformWith {
         case Success("FOO") => Future failed expected1
         case _ => Future successful "FOO"
@@ -342,9 +357,15 @@ class FutureTests extends MinimalScalaTest {
         case Success("FOO") => Future failed expected2
         case _ => Future successful "FOO"
       }
+      val f3 = Future.successful("FOO") transformWith {
+        case Success("FOO") => throw expected3
+        case _ => Future successful "FOO"
+      }
+
 
       intercept[Exception] { Await.result(f1, defaultTimeout) } mustBe expected1
-      intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2      
+      intercept[Exception] { Await.result(f2, defaultTimeout) } mustBe expected2
+      intercept[Exception] { Await.result(f3, defaultTimeout) } mustBe expected3
     }
 
     "andThen like a boss" in {

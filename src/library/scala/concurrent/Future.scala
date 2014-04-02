@@ -200,7 +200,8 @@ trait Future[+T] extends Awaitable[T] {
    *  WARNING: Will not be called if this future is never completed or if it is completed with a failure.
    *
    * @tparam U     only used to accept any return type of the given callback function
-   * @param f      the function which will be executed if this `Future` completes with a result
+   * @param f      the function which will be executed if this `Future` completes with a result,
+   *               the return value of `f` will be discarded.
    */
   def foreach[U](f: T => U)(implicit executor: ExecutionContext): Unit = onComplete { _ foreach f }
 
@@ -220,7 +221,7 @@ trait Future[+T] extends Awaitable[T] {
       case Failure(t) => Try(throw f(t)) // will throw fatal errors!
     }
 
-  /** Creates a new Future by applying the speficied function to the result
+  /** Creates a new Future by applying the specified function to the result
    * of this Future. If there is any non-fatal exception thrown when 'f'
    * is applied then that exception will be propagated to the resulting future.
    *
@@ -230,7 +231,7 @@ trait Future[+T] extends Awaitable[T] {
    */
   def transform[S](f: Try[T] => Try[S])(implicit executor: ExecutionContext): Future[S]
 
-  /** Creates a new Future by applying the speficied function, which produces a Future, to the result
+  /** Creates a new Future by applying the specified function, which produces a Future, to the result
    * of this Future. If there is any non-fatal exception thrown when 'f'
    * is applied then that exception will be propagated to the resulting future.
    *

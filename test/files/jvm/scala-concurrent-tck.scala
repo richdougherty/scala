@@ -191,7 +191,7 @@ def testTransformFailure(): Unit = once {
   def testTransformFailureToResult(): Unit = once {
     done =>
     val e = "foo"
-      Future(new Exception("initial")).transform {
+      Future(throw new Exception("initial")).transform {
         case Success(s) => throw new Exception("test failed")
         case Failure(f) => Success(e)
       } onComplete {
@@ -203,7 +203,7 @@ def testTransformFailure(): Unit = once {
   def testTransformFailureToFailure(): Unit = once {
     done =>
       val e = new Exception("expected")
-      Future(new Exception("initial")).transform {
+      Future(throw new Exception("initial")).transform {
         case Success(s) => throw new Exception("test failed")
         case Failure(f) => Failure(e)
       } onComplete {
@@ -238,7 +238,7 @@ def testTransformFailure(): Unit = once {
   def testTransformWithFailureToResult(): Unit = once {
     done =>
     val e = "foo"
-      Future(new Exception("initial")).transformWith {
+      Future(throw new Exception("initial")).transformWith {
         case Success(s) => throw new Exception("test failed")
         case Failure(f) => Future(e)
       } onComplete {
@@ -250,7 +250,7 @@ def testTransformFailure(): Unit = once {
   def testTransformWithFailureToFailure(): Unit = once {
     done =>
       val e = new Exception("expected")
-      Future(new Exception("initial")).transformWith {
+      Future(throw new Exception("initial")).transformWith {
         case Success(s) => throw new Exception("test failed")
         case Failure(f) => Future(throw e)
       } onComplete {
@@ -467,6 +467,16 @@ def testTransformFailure(): Unit = once {
   testFallbackToFailure()
   testTransformSuccess()
   testTransformSuccessPF()
+  testTransformFailure()
+  testTransformFailurePF()
+  testTransformResultToResult()
+  testTransformResultToFailure()
+  testTransformFailureToResult()
+  testTransformFailureToFailure()
+  testTransformWithResultToResult()
+  testTransformWithResultToFailure()
+  testTransformWithFailureToResult()
+  testTransformWithFailureToFailure()
 }
 
 
