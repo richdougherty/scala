@@ -19,7 +19,7 @@ class MapBuilderBenchmark {
   @Param(Array("0","1","2","3","4","5","50"))
   var size: Int = _
 
-  var elems: Array[(String,String)] = _
+  var elems: Vector[(String,String)] = _
   var elemMap: Map[String,String] = _
   var result: Map[String,String] = _
 
@@ -28,8 +28,7 @@ class MapBuilderBenchmark {
     // Slightly randomize the keys in the map
     val thread = Thread.currentThread.getName
     val time = System.currentTimeMillis()
-    elems = (0 until size).map(i => (s"key$i-$thread-$time" -> s"$i")).toArray
-    elemMap = elems.toMap
+    elems = (0 until size).map(i => (s"key$i-$thread-$time" -> s"$i")).to(Vector)
   }
 
   @TearDown(Level.Iteration)
