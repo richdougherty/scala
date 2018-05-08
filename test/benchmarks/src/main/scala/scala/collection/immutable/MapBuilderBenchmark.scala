@@ -29,6 +29,7 @@ class MapBuilderBenchmark {
     val thread = Thread.currentThread.getName
     val time = System.currentTimeMillis()
     elems = (0 until size).map(i => (s"key$i-$thread-$time" -> s"$i")).to(Vector)
+    elemMap = elems.toMap
   }
 
   @TearDown(Level.Iteration)
