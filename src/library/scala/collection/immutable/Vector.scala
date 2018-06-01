@@ -612,29 +612,55 @@ final class VectorBuilder[A]() extends ReusableBuilder[A, Vector[A]] with Vector
   // possible alternative: start with display0 = null, blockIndex = -32, lo = 32
   // to avoid allocating initial array if the result will be empty anyways
 
-  display0 = new Array[AnyRef](32)
-  depth = 1
+  depth = 0
 
   private var blockIndex = 0
   private var lo = 0
+  //private var length = 0
+  //private var hint = -1
 
   def size: Int = blockIndex + lo
   def isEmpty: Boolean = size == 0
   def nonEmpty: Boolean = size != 0
 
-  def addOne(elem: A): this.type = {
-    if (lo >= display0.length) {
+  //override def sizeHint(size: Int): Unit = hint = size
+
+  override def addOne(elem: A): this.type = {
+    if (depth == 0) {
+      display0 = new Array[AnyRef](32)
+    } else if (lo >= display0.length) {
       val newBlockIndex = blockIndex + 32
       gotoNextBlockStartWritable(newBlockIndex, blockIndex ^ newBlockIndex)
       blockIndex = newBlockIndex
       lo = 0
     }
+
     display0(lo) = elem.asInstanceOf[AnyRef]
     lo += 1
     this
   }
 
-  def result(): Vector[A] = {
+  // def prepareBlock(newBlockIndex: Int): Unit = {
+  //   val initialBlockSize = if (hint == -1) {
+  //     32 // TODO: Can we be smarter about this...
+  //   } else {
+  //     val needed = hint - length
+  //     if (needed < 0 || needed > 32) 32 else needed
+  //   }
+  //   gotoNewBlock(newBlockIndex)
+  //   blockIndex = newBlockIndex
+  //   lo = 0
+  // }
+
+  // if (depth == 0) {
+  //   gotoNewBlock(0, 0)
+  // } else if (lo >= length) {
+  //   gotoNextBlockStartWritable(blockIndex + 32, blockIndex ^ newBlockIndex)
+  //   blockIndex = newBlockIndex
+  //   lo = 0
+  // }
+
+  override def result(): Vector[A] = {
     val size = this.size
     if (size == 0)
       return Vector.empty
@@ -644,7 +670,7 @@ final class VectorBuilder[A]() extends ReusableBuilder[A, Vector[A]] with Vector
     s
   }
 
-  def clear(): Unit = {
+  override def clear(): Unit = {
     display0 = new Array[AnyRef](32)
     depth = 1
     blockIndex = 0
@@ -654,11 +680,17 @@ final class VectorBuilder[A]() extends ReusableBuilder[A, Vector[A]] with Vector
 
 private[immutable] trait VectorPointer[T] {
     private[immutable] var depth:    Int = _
+    /** The top item on the stack, or null if depth is 0 */
     private[immutable] var display0: Array[AnyRef] = _
+    /** The second item on the stack, or null if depth is < 2. */
     private[immutable] var display1: Array[AnyRef] = _
+    /** The third item on the stack, or null if depth is < 3. */
     private[immutable] var display2: Array[AnyRef] = _
+    /** The fourth item on the stack, or null if depth is < 4. */
     private[immutable] var display3: Array[AnyRef] = _
+    /** The fifth item on the stack, or null if depth is < 5. */
     private[immutable] var display4: Array[AnyRef] = _
+    /** The 6th item on the stack, or null if depth is < 5. */
     private[immutable] var display5: Array[AnyRef] = _
 
     // used
