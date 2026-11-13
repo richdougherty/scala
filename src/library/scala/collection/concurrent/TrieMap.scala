@@ -674,9 +674,8 @@ private[concurrent] object CNode {
 }
 
 
-private[concurrent] case class RDCSS_Descriptor[K, V](old: INode[K, V], expectedmain: MainNode[K, V], nv: INode[K, V]) {
-  @volatile var committed = false
-}
+private[concurrent] case class RDCSS_Descriptor[K, V](old: INode[K, V], expectedmain: MainNode[K, V], nv: INode[K, V])
+  extends RDCSS_DescriptorBase
 
 
 /** A concurrent hash-trie or TrieMap is a concurrent thread-safe lock-free
@@ -769,21 +768,12 @@ final class TrieMap[K, V] private (r: AnyRef, rtupd: AtomicReferenceFieldUpdater
       case in: INode[K, V] @uc => in
       case desc: RDCSS_Descriptor[K, V] @uc =>
         val RDCSS_Descriptor(ov, exp, nv) = desc
-        if (abort) {
-          if (CAS_ROOT(desc, ov)) ov
-          else RDCSS_Complete(abort)
-        } else {
-          val oldmain = ov.gcasRead(this)
-          if (oldmain eq exp) {
-            if (CAS_ROOT(desc, nv)) {
-              desc.committed = true
-              nv
-            } else RDCSS_Complete(abort)
-          } else {
-            if (CAS_ROOT(desc, ov)) ov
-            else RDCSS_Complete(abort)
-          }
-        }
+        if (desc.decision == RDCSS_DescriptorBase.UNDECIDED)
+          desc.decide(if (abort || (ov.gcasRead(this) ne exp)) RDCSS_DescriptorBase.ABORT else RDCSS_DescriptorBase.COMMIT)
+        // Every thread installs the root the decision names, so they all agree on the outcome
+        val next = if (desc.decision == RDCSS_DescriptorBase.COMMIT) nv else ov
+        if (CAS_ROOT(desc, next)) next
+        else RDCSS_Complete(abort)
       case x => throw new MatchError(x)
     }
   }
@@ -792,7 +782,7 @@ final class TrieMap[K, V] private (r: AnyRef, rtupd: AtomicReferenceFieldUpdater
     val desc = RDCSS_Descriptor(ov, expectedmain, nv)
     if (CAS_ROOT(ov, desc)) {
       RDCSS_Complete(abort = false)
-      /*READ*/desc.committed
+      desc.decision == RDCSS_DescriptorBase.COMMIT
     } else false
   }
 
