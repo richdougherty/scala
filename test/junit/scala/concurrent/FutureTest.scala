@@ -300,6 +300,25 @@ class FutureTest {
     assertEquals(1000, numTransforms(p))
   }
 
+  // Unregistering from a promise that `linkRootOf` has linked, but whose callbacks it hasn't yet
+  // moved to the root, must not remove the root's own callbacks.
+  @Test def t13197UnregisterWhileLinking(): Unit = {
+    val inner = new DefaultPromise[Int]()
+    val outer = new DefaultPromise[Int]()
+    val ran = ListBuffer.empty[String]
+    outer.onComplete(_ => ran += "a")(ExecutionContext.parasitic)
+    outer.onComplete(_ => ran += "b")(ExecutionContext.parasitic)
+    val unregister = inner.onCompleteWithUnregister(_ => ran += "inner")(ExecutionContext.parasitic)
+
+    // The first step of `linkRootOf`: `inner` now links to `outer`, but its callback isn't on `outer` yet
+    assertTrue(inner.compareAndSet(inner.get(), new impl.Promise.Link(outer)))
+    unregister()
+    assertEquals(2, numTransforms(outer))
+
+    outer.success(1)
+    assertEquals(List("a", "b"), ran.toList.sorted)
+  }
+
   @Test def completedWaitUndefined(): Unit = {
     assertThrows[IllegalArgumentException](Await.result(Future.successful(1), Undefined))
     assertThrows[IllegalArgumentException](Await.ready(Future.successful(1), Undefined))
