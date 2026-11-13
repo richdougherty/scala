@@ -1,8 +1,10 @@
 
 package scala.concurrent
 
-import org.junit.Assert.{assertEquals, assertTrue}
+import org.junit.Assert.{assertEquals, assertFalse, assertTrue}
 import org.junit.Test
+
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReferenceArray}
 
 import scala.tools.testkit.AssertUtil._
 import scala.util.{Success, Try}
@@ -298,6 +300,62 @@ class FutureTest {
     threads.foreach(_.start())
     threads.foreach(_.join())
     assertEquals(1000, numTransforms(p))
+  }
+
+  // Two flatMaps whose functions return each other's result can never complete. When both are linked
+  // at the same time, their promises must not link to each other: every later call on either future
+  // (`isCompleted`, `onComplete`, `toString`, ...) would then loop forever.
+  @Test def concurrentLinkingMakesNoCycle(): Unit = {
+    def linkedTo(f: Future[_]): Future[_] = f.asInstanceOf[DefaultPromise[_]].get() match {
+      case l: impl.Promise.Link[_] => l.get()
+      case _ => null
+    }
+    // Follows links from `f` without compressing them, as `isCompleted` would
+    def inCycle(f: Future[_]): Boolean = {
+      var p = linkedTo(f)
+      var steps = 0
+      while ((p ne null) && (p ne f) && steps < 10) { p = linkedTo(p); steps += 1 }
+      p eq f
+    }
+
+    val rounds = 10000
+    val gates = new AtomicReferenceArray[Promise[Unit]](2)
+    val go, done = new AtomicInteger
+    val stop = new AtomicBoolean
+    val completers = List.tabulate(2)(i => new Thread(() => {
+      var r = 1
+      while (r <= rounds && !stop.get) {
+        while (go.get < r && !stop.get) Thread.onSpinWait()
+        if (!stop.get) {
+          gates.get(i).success(())
+          done.incrementAndGet()
+        }
+        r += 1
+      }
+    }))
+    completers.foreach(_.start())
+
+    var cycles = 0
+    var r = 0
+    try {
+      while (cycles == 0 && r < rounds) {
+        r += 1
+        val a, b = Promise[Unit]()
+        val o = new Array[Future[Int]](2)
+        o(0) = a.future.flatMap(_ => o(1))(ExecutionContext.parasitic)
+        o(1) = b.future.flatMap(_ => o(0))(ExecutionContext.parasitic)
+        gates.set(0, a)
+        gates.set(1, b)
+        go.set(r) // both threads now complete their gate, and so link o(0) and o(1), at about the same time
+        while (done.get < 2 * r) Thread.onSpinWait()
+        if (inCycle(o(0)) || inCycle(o(1))) cycles += 1
+        else assertFalse(o(0).isCompleted || o(1).isCompleted)
+      }
+    } finally {
+      stop.set(true)
+      completers.foreach(_.join())
+    }
+    assertEquals(s"rounds whose futures link to each other, in $r rounds", 0, cycles)
   }
 
   @Test def completedWaitUndefined(): Unit = {
