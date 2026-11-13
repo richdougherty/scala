@@ -676,6 +676,10 @@ private[concurrent] object CNode {
 
 private[concurrent] case class RDCSS_Descriptor[K, V](old: INode[K, V], expectedmain: MainNode[K, V], nv: INode[K, V]) {
   @volatile var committed = false
+  /** Whether the swap commits, decided once by whichever thread gets there first: 0 undecided, 1 commit, 2 abort.
+   *  Everyone then installs the same root, and the owner reads its result from here, not from a flag
+   *  that a completing thread sets only after its CAS. */
+  private[concurrent] val decision = new AtomicInteger(0)
 }
 
 
@@ -769,21 +773,15 @@ final class TrieMap[K, V] private (r: AnyRef, rtupd: AtomicReferenceFieldUpdater
       case in: INode[K, V] @uc => in
       case desc: RDCSS_Descriptor[K, V] @uc =>
         val RDCSS_Descriptor(ov, exp, nv) = desc
-        if (abort) {
-          if (CAS_ROOT(desc, ov)) ov
-          else RDCSS_Complete(abort)
-        } else {
-          val oldmain = ov.gcasRead(this)
-          if (oldmain eq exp) {
-            if (CAS_ROOT(desc, nv)) {
-              desc.committed = true
-              nv
-            } else RDCSS_Complete(abort)
-          } else {
-            if (CAS_ROOT(desc, ov)) ov
-            else RDCSS_Complete(abort)
-          }
+        if (desc.decision.get == 0) {
+          val verdict = if (abort || (ov.gcasRead(this) ne exp)) 2 else 1
+          desc.decision.compareAndSet(0, verdict)
         }
+        val commit = desc.decision.get == 1
+        if (commit) desc.committed = true
+        val next = if (commit) nv else ov
+        if (CAS_ROOT(desc, next)) next
+        else RDCSS_Complete(abort)
       case x => throw new MatchError(x)
     }
   }
@@ -792,7 +790,7 @@ final class TrieMap[K, V] private (r: AnyRef, rtupd: AtomicReferenceFieldUpdater
     val desc = RDCSS_Descriptor(ov, expectedmain, nv)
     if (CAS_ROOT(ov, desc)) {
       RDCSS_Complete(abort = false)
-      /*READ*/desc.committed
+      desc.decision.get == 1
     } else false
   }
 
