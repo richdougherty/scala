@@ -389,10 +389,28 @@ private[concurrent] object Promise {
           val l = if (link ne null) link else new Link(target)
           val p = l.promise(this)
           if ((this ne p) && compareAndSet(state, l)) {
-            if (state ne Noop) p.dispatchOrAddCallbacks(p.get(), state.asInstanceOf[Callbacks[T]]) // Noop-check is important here
+            // `p` was the root when we looked, but it may have been linked since. Find the root now:
+            // if the way leads back here, our link closed a cycle (futures whose functions return
+            // each other), so undo it, as `this eq p` would have; otherwise point our link at the
+            // current root, so a stale chain isn't kept alive behind it (an endless flatMap loop
+            // run by several threads could otherwise keep every level reachable).
+            val q = rootAfterLink(p)
+            if (q eq null) compareAndSet(l, state)
+            else {
+              if (q ne p) l.compareAndSet(p, q)
+              if (state ne Noop) q.dispatchOrAddCallbacks(q.get(), state.asInstanceOf[Callbacks[T]]) // Noop-check is important here
+            }
           } else linkRootOf(p, l)
         } else /* if (state.isInstanceOf[Link[T]]) */
           state.asInstanceOf[Link[T]].promise(this).linkRootOf(target, link)
+      }
+
+    /** The root reached by following links from `p`, without compressing them; null if they lead back here. */
+    @tailrec private[this] final def rootAfterLink(p: DefaultPromise[T]): DefaultPromise[T] =
+      if (p eq this) null
+      else {
+        val s = p.get()
+        if (s.isInstanceOf[Link[_]]) rootAfterLink(s.asInstanceOf[Link[T]].get()) else p
       }
 
     /**
