@@ -3,6 +3,8 @@ package scala.collection.concurrent
 import org.junit.Test
 import org.junit.Assert.assertEquals
 
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
+
 import scala.util.hashing.Hashing
 import scala.tools.testkit.AssertUtil.assertThrows
 import scala.util.chaining._
@@ -704,5 +706,46 @@ class TrieMapTest {
     assert(!TrieMap.from((1 to 5).map(x => x -> x)).isEmpty)
     assert(!TrieMap.from((1 to 10).map(x => x -> x)).isEmpty)
     assert(!TrieMap.from((1 to 100).map(x => x -> x)).isEmpty)
+  }
+
+  // Once a `clear()` has taken effect, it must not also remove entries put after that.
+  // Readers complete the clearer's root swap for it, which is where it could run twice.
+  @Test
+  def clearDoesNotRemoveLaterPuts(): Unit = {
+    val m = TrieMap[String, Int]()
+    val started, finished = new AtomicLong
+    val stop = new AtomicBoolean
+    val clearer = new Thread(() =>
+      while (!stop.get) {
+        m.update("a", 1)
+        started.incrementAndGet()
+        m.clear()
+        finished.incrementAndGet()
+      })
+    val readers = List.fill(2)(new Thread(() => while (!stop.get) m.get("x")))
+    val threads = clearer :: readers
+    threads.foreach(_.start())
+
+    val deadline = System.nanoTime + 5L * 1000 * 1000 * 1000
+    var checks, lost = 0
+    try {
+      while (lost == 0 && checks < 20000 && System.nanoTime < deadline) {
+        val n = started.get
+        // Only when exactly clear number `n` is running, and has already removed "a"
+        if (finished.get == n - 1 && m.get("a").isEmpty) {
+          m.put("w", 1)
+          while (finished.get < n && System.nanoTime < deadline) Thread.onSpinWait()
+          if (finished.get == n && started.get == n) {
+            checks += 1
+            if (m.get("w").isEmpty && started.get == n) lost += 1
+          }
+          m.remove("w")
+        }
+      }
+    } finally {
+      stop.set(true)
+      threads.foreach(_.join())
+    }
+    assertEquals(s"puts removed by a clear() that had already taken effect, in $checks checks", 0, lost)
   }
 }
