@@ -336,7 +336,9 @@ private[concurrent] object Promise {
       if (state eq t) {
         if (!compareAndSet(state, Noop)) unregisterCallback(t)
       } else if (state.isInstanceOf[ManyCallbacks[_]]) {
-        if (!compareAndSet(state, removeCallback(state.asInstanceOf[ManyCallbacks[T]], t))) unregisterCallback(t)
+        val rest = removeCallback(state.asInstanceOf[ManyCallbacks[T]], t)
+        // null: `t` isn't in the list, so there is nothing to remove (see the `Link` case below)
+        if ((rest ne null) && !compareAndSet(state, rest)) unregisterCallback(t)
       } else if (state.isInstanceOf[Link[_]]) {
         // Misses `t` if `linkRootOf` is concurrently moving it to the root. It then stays there until the root completes,
         // which is rare and bounded: a promise is linked only once.
@@ -364,7 +366,7 @@ private[concurrent] object Promise {
           else concatCallbacks(m.rest, result)
         }
         else removeCallback(m.rest, t, if (result == null) m.first else new ManyCallbacks(m.first, result))
-      } else cs
+      } else null // `t` isn't in `cs`: it may be in flight to a root (see `unregisterCallback`)
 
     // IMPORTANT: Noop should not be passed in here, `callbacks` cannot be null
     @tailrec
